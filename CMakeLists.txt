@@ -1,0 +1,7 @@
+#cmake_minimum_required( VERSION 3.10.3...3.28.3 )
+#set(CMAKE_SUPPRESS_REGENERATION TRUE)
+project(CUDA VERSION 1.0)
+add_subdirectory(CUDAStarter)
+add_subdirectory(CUDATemplate)
+add_subdirectory(CUDA1DVectorProduct)
+add_subdirectory(CUDAVectorProductScalable)
