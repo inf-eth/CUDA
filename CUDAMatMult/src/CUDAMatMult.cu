@@ -6,6 +6,7 @@
 #include <omp.h>
 #include <iostream>
 #include <chrono>
+#include <stdio.h>
 using std::cout;
 using std::endl;
 using std::chrono::high_resolution_clock;
@@ -28,8 +29,8 @@ struct msClock
 Clock;
 
 // CUDA block sizes for kernel
-#define BLKI 1
-#define BLKJ 128
+#define BLKI 8
+#define BLKJ 8
 #define BLKK 1
 
 void NullMat(TYPE*, int, int);
@@ -58,10 +59,65 @@ __global__ void MatMultKernel2D(TYPE* C, TYPE* A, TYPE* B, int rA, int cA, int r
 {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	int j = blockIdx.y * blockDim.y + threadIdx.y;
+
 	TYPE Sum = 0;
 	for (int k=0; k<cA; k++)
 		Sum = Sum+A[k+i*cA]*B[j+k*cB];
 	C[j+i*cB] = Sum;
+
+}
+
+__global__ void MatMultKernel2DShared(TYPE* C, TYPE* A, TYPE* B, int rA, int cA, int rB, int cB)
+{
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	int j = blockIdx.y * blockDim.y + threadIdx.y;
+	int li = threadIdx.x;
+	int lj = threadIdx.y;
+
+	//if (li==0 && lj==0)
+	//	printf("li=%d, lj=%d\n",li,lj);
+	//printf("%d\n", i+j);
+	__shared__ TYPE lA[BLKI][BLKJ];
+	__shared__ TYPE lB[BLKI][BLKJ];
+
+	TYPE SubSum = 0;
+
+	int gridrows = rB/BLKI;
+	//int gridcols = cA/BLKJ;
+
+	for (int blockINo=0, blockJNo=0; blockINo<gridrows; blockINo++, blockJNo++)
+	{
+		int iOffset = blockIdx.x * blockDim.x;
+		int jOffset = blockIdx.y * blockDim.y;
+
+		//if (li==0 && lj==0)
+		//	printf("iOffset=%d, jOffset=%d\n",iOffset,jOffset);
+
+		int ii = iOffset+li;
+		int jj = blockJNo*BLKJ+lj;
+		lA[li][lj] = A[jj+ii*cA];	// A[ii][jj] = A[offset+li][
+
+		ii = blockINo*BLKI+li;
+		jj = jOffset+lj;
+		lB[li][lj] = B[jj+ii*cB];	// B[ii][jj]
+
+		__syncthreads();
+
+		//if (li==0 && lj==0)
+		//{
+			//printf("li=%d, lj=%d: ii=%d, jj=%d\n",li,lj,ii,jj);
+			//TYPE* temp = (TYPE*)&lA[0][0];
+			//for (int _i=0;_i<BLKI*BLKJ;_i++)
+			//	printf("%d ", (int)temp[_i]);
+		//}
+
+		for (int k=0; k<BLKJ; k++)
+			SubSum = SubSum + lA[li][k] * lB[k][lj];
+
+		__syncthreads();
+	}
+	C[j+i*cB] = SubSum;
+
 }
 
 int main()
@@ -108,7 +164,7 @@ int main()
 	displayMat(B,rB,cB);
 
 	Clock.Start();
-	matMult(C,A,B,rA,cA,rB,cB);
+	//matMult(C,A,B,rA,cA,rB,cB);
 	Clock.Stop();
 	cout << "Time taken (single): " << Clock.ElapsedTime() << " ms." << endl;
 	//cout <<("Time taken (single): "+to_string(Clock.ElapsedTime(), 3)+" ms.");
@@ -116,34 +172,55 @@ int main()
 	displayMat(C,rA,cB);
 
 	Clock.Start();
-	matMultOMP(C,A,B,rA,cA,rB,cB);
+	//matMultOMP(C,A,B,rA,cA,rB,cB);
 	Clock.Stop();
 	cout << "Time taken (OMP): " << Clock.ElapsedTime() << " ms." << endl;
 
 	#ifdef __linux__
 	Clock.Start();
-	matMultOACC(C,A,B,rA,cA,rB,cB);
+	//matMultOACC(C,A,B,rA,cA,rB,cB);
 	Clock.Stop();
 	cout << "Time taken (OACC): " << Clock.ElapsedTime() << " ms." << endl;
 	#endif
 
 	// ================================= CUDA Mat Mult =========================================
 	cout << "Value before kernel execution: C[0]: " << gpuCResult[0] << endl;
+	
+	for ( int i=0; i<10; i++)
+	{
+		Clock.Start();
+		// copy data from host memory to device memory
+		cudaMemcpy(gpuA, A, rA*cA * sizeof(TYPE), cudaMemcpyHostToDevice);
+		cudaMemcpy(gpuB, B, rB*cB * sizeof(TYPE), cudaMemcpyHostToDevice);
+		// run add_kernel on the device
+		//MatMultKernel <<< grid, block >>> (gpuC, gpuA, gpuB, rA, cA, rB, cB);
+		MatMultKernel2D <<< grid2D, block2D >>> (gpuC, gpuA, gpuB, rA, cA, rB, cB);
+		//MatMultKernel2DShared <<< grid2D, block2D >>> (gpuC, gpuA, gpuB, rA, cA, rB, cB);
+		// copy data from device memory to host memory
+		cudaMemcpy(gpuCResult, gpuC, rA*cB * sizeof(TYPE), cudaMemcpyDeviceToHost);
+		Clock.Stop();
+		cout << "Time taken (CUDA): " << Clock.ElapsedTime() << " ms." << endl;
+		// =========================================================================================
+	}
+	cout << "========== Shared =========" << endl;
+	for ( int i=0; i<10; i++)
+	{
+		Clock.Start();
+		// copy data from host memory to device memory
+		cudaMemcpy(gpuA, A, rA*cA * sizeof(TYPE), cudaMemcpyHostToDevice);
+		cudaMemcpy(gpuB, B, rB*cB * sizeof(TYPE), cudaMemcpyHostToDevice);
+		// run add_kernel on the device
+		//MatMultKernel <<< grid, block >>> (gpuC, gpuA, gpuB, rA, cA, rB, cB);
+		//MatMultKernel2D <<< grid2D, block2D >>> (gpuC, gpuA, gpuB, rA, cA, rB, cB);
+		MatMultKernel2DShared <<< grid2D, block2D >>> (gpuC, gpuA, gpuB, rA, cA, rB, cB);
+		// copy data from device memory to host memory
+		cudaMemcpy(gpuCResult, gpuC, rA*cB * sizeof(TYPE), cudaMemcpyDeviceToHost);
+		Clock.Stop();
+		cout << "Time taken (CUDA): " << Clock.ElapsedTime() << " ms." << endl;
+		// =========================================================================================
+	}
 
-	Clock.Start();
-	// copy data from host memory to device memory
-	cudaMemcpy(gpuA, A, rA*cA * sizeof(TYPE), cudaMemcpyHostToDevice);
-	cudaMemcpy(gpuB, B, rB*cB * sizeof(TYPE), cudaMemcpyHostToDevice);
-	// run add_kernel on the device
-	//MatMultKernel <<< grid, block >>> (gpuC, gpuA, gpuB, rA, cA, rB, cB);
-	MatMultKernel2D <<< grid2D, block2D >>> (gpuC, gpuA, gpuB, rA, cA, rB, cB);
-	// copy data from device memory to host memory
-	cudaMemcpy(gpuCResult, gpuC, rA*cB * sizeof(TYPE), cudaMemcpyDeviceToHost);
-	Clock.Stop();
-	cout << "Time taken (CUDA): " << Clock.ElapsedTime() << " ms." << endl;
-	// =========================================================================================
-
-	displayMat(gpuC,rA,cB);
+	displayMat(gpuCResult,rA,cB);
 
 	cout << "CPU and GPU diff: " << diffMat(C,gpuCResult,rA,cB) << endl;
 	cout << "Value after kernel execution: C[0]: " << gpuCResult[0] << endl;

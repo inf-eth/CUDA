@@ -4,7 +4,7 @@ using std::cout;
 using std::endl;
 
 #define TYPE float
-#define BLOCKSIZE 32
+#define BLOCKSIZE 32	// Workgroup size
 
 // kernel
 __global__ void add_kernel(TYPE* A, TYPE* B, TYPE* C) {
@@ -16,17 +16,17 @@ int main()
 {
 	// Sizes
 	const unsigned int N = 1024u;
-	dim3 block(BLOCKSIZE);
-	dim3 grid(N/BLOCKSIZE);
-	
+	dim3 block(BLOCKSIZE);		// Workgroup size
+	dim3 grid(N/BLOCKSIZE);		// No. of workgroups = Global threads/workgroup size
+
 	// Host and Device pointers;
 	TYPE *h_A, *h_B, *h_C, *d_A, *d_B, *d_C;
-	
+
 	// Host memory allocation
 	h_A = new TYPE[N];
 	h_B = new TYPE[N];
 	h_C = new TYPE[N];
-	
+
 	// host data initialisation
     for (unsigned int i = 0; i<N; i++)
     {
